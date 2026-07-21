@@ -1,0 +1,10 @@
+.DS_Store
+/target
+/.tauri
+/ios/.build
+/ios/Packages
+/ios/*.xcodeproj
+/ios/xcuserdata
+/ios/DerivedData
+/ios/.swiftpm
+/ios/Package.resolved
