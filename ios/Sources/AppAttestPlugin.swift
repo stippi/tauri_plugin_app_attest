@@ -44,7 +44,7 @@ class AppAttestPlugin: Plugin {
         let clientDataHash = Data(SHA256.hash(data: challenge))
 
         if let keyId = Self.loadKeyId() {
-            attestKey(keyId, clientDataHash: clientDataHash, invoke: invoke, retryOnInvalidKey: true)
+            attestKey(keyId, clientDataHash: clientDataHash, invoke: invoke, storedKey: true)
         } else {
             generateAndAttest(clientDataHash: clientDataHash, invoke: invoke)
         }
@@ -58,13 +58,15 @@ class AppAttestPlugin: Plugin {
                 return
             }
             Self.storeKeyId(keyId)
-            self.attestKey(keyId, clientDataHash: clientDataHash, invoke: invoke, retryOnInvalidKey: false)
+            self.attestKey(keyId, clientDataHash: clientDataHash, invoke: invoke, storedKey: false)
         }
     }
 
+    /// `storedKey`: the key id came from the Keychain (as opposed to one
+    /// generated a moment ago). Only such a key is worth retrying without.
     @available(iOS 14.0, *)
     private func attestKey(
-        _ keyId: String, clientDataHash: Data, invoke: Invoke, retryOnInvalidKey: Bool
+        _ keyId: String, clientDataHash: Data, invoke: Invoke, storedKey: Bool
     ) {
         DCAppAttestService.shared.attestKey(keyId, clientDataHash: clientDataHash) {
             attestation, error in
@@ -75,15 +77,42 @@ class AppAttestPlugin: Plugin {
                 ])
                 return
             }
-            // A stored key can become invalid (e.g. after a device restore).
-            // Drop it and retry once with a freshly generated key.
-            if retryOnInvalidKey, let dcError = error as? DCError, dcError.code == .invalidKey {
+            // A stored key can be unusable in two ways: invalidated on the
+            // device (a restore — `.invalidKey`), or generated under the
+            // other App Attest environment. The key id is persisted right
+            // after `generateKey`, before any attestation succeeded, so a
+            // build without the production entitlement leaves a development
+            // key behind that a later production build finds in the
+            // Keychain — and attesting it against production fails with
+            // `.invalidInput`. Either way: drop it and retry once with a
+            // freshly generated key.
+            if storedKey, let dcError = error as? DCError,
+                dcError.code == .invalidKey || dcError.code == .invalidInput
+            {
                 Self.deleteKeyId()
                 self.generateAndAttest(clientDataHash: clientDataHash, invoke: invoke)
                 return
             }
-            invoke.reject("attestKey failed: \(error?.localizedDescription ?? "unknown error")")
+            let origin = storedKey ? "stored key" : "fresh key"
+            invoke.reject("attestKey failed (\(origin)): \(Self.describe(error))")
         }
+    }
+
+    /// `DCError`s by name and code; `localizedDescription` alone reads
+    /// "The operation couldn't be completed" for every one of them.
+    private static func describe(_ error: Error?) -> String {
+        guard let error = error else { return "unknown error" }
+        guard let dcError = error as? DCError else { return error.localizedDescription }
+        let name: String
+        switch dcError.code {
+        case .unknownSystemFailure: name = "unknownSystemFailure"
+        case .featureUnsupported: name = "featureUnsupported"
+        case .invalidInput: name = "invalidInput"
+        case .invalidKey: name = "invalidKey"
+        case .serverUnavailable: name = "serverUnavailable"
+        @unknown default: name = "unknown"
+        }
+        return "DCError.\(name) (\(dcError.code.rawValue))"
     }
 
     // MARK: - Keychain persistence
