@@ -160,6 +160,6 @@ class AppAttestPlugin: Plugin {
 }
 
 @_cdecl("init_plugin_app_attest")
-func initPlugin() -> Plugin {
+public func initPlugin() -> Plugin {
     AppAttestPlugin()
 }
